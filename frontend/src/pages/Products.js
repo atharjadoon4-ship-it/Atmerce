@@ -13,7 +13,7 @@ const Products = () => {
   const [searchParams] = useSearchParams();
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
-  const [selectedCategory, setSelectedCategory] = useState(searchParams.get('category') || '');
+  const [selectedCategory, setSelectedCategory] = useState(searchParams.get('category') || 'all');
   const [searchQuery, setSearchQuery] = useState(searchParams.get('search') || '');
   const [loading, setLoading] = useState(true);
 
@@ -22,7 +22,7 @@ const Products = () => {
   }, []);
 
   useEffect(() => {
-    setSelectedCategory(searchParams.get('category') || '');
+    setSelectedCategory(searchParams.get('category') || 'all');
     setSearchQuery(searchParams.get('search') || '');
   }, [searchParams]);
 
@@ -43,7 +43,7 @@ const Products = () => {
     setLoading(true);
     try {
       let url = `${API}/products?active_only=true`;
-      if (selectedCategory) {
+      if (selectedCategory && selectedCategory !== 'all') {
         const category = categories.find(c => c.slug === selectedCategory);
         if (category) {
           url += `&category_id=${category.id}`;
@@ -69,7 +69,7 @@ const Products = () => {
         <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-8">
           <div>
             <h1 className="text-4xl font-black tracking-tight text-gray-900 dark:text-white mb-2" data-testid="products-title">
-              {searchQuery ? `Search Results for "${searchQuery}"` : selectedCategory ? selectedCategory.replace('-', ' ').toUpperCase() : 'All Products'}
+              {searchQuery ? `Search Results for "${searchQuery}"` : selectedCategory && selectedCategory !== 'all' ? selectedCategory.replace('-', ' ').toUpperCase() : 'All Products'}
             </h1>
             <p className="text-gray-600 dark:text-gray-400">{products.length} products found</p>
           </div>
@@ -80,7 +80,7 @@ const Products = () => {
                 <SelectValue placeholder="All Categories" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Categories</SelectItem>
+                <SelectItem value="all">All Categories</SelectItem>
                 {categories.map((cat) => (
                   <SelectItem key={cat.id} value={cat.slug}>{cat.name}</SelectItem>
                 ))}
