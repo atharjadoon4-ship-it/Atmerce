@@ -1,27 +1,27 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Form, Query, Response
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Query, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func, and_, or_, update as sql_update, delete as sql_delete
+from sqlalchemy.orm import selectinload
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, EmailStr, ConfigDict
+from pydantic import BaseModel, EmailStr
 from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone, timedelta
 import bcrypt
 import jwt
-import base64
+
+from database import get_db
+from models import User, Category, Product, Order, Review, Coupon, Banner, Settings, FileMetadata
 from storage import init_storage, put_object, get_object
 from email_service import send_email, get_order_confirmation_email, get_order_status_email
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
-
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -31,7 +31,7 @@ JWT_SECRET = os.environ.get('JWT_SECRET', 'your-secret-key-change-in-production'
 JWT_ALGORITHM = 'HS256'
 JWT_EXPIRATION_HOURS = 720
 
-# Models
+# Pydantic Models
 class UserRegister(BaseModel):
     email: EmailStr
     password: str
@@ -182,11 +182,12 @@ def create_token(user_id: str, email: str, role: str) -> str:
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: AsyncSession = Depends(get_db)):
     try:
         token = credentials.credentials
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        user = await db.users.find_one({'id': payload['user_id']}, {'_id': 0})
+        result = await db.execute(select(User).where(User.id == payload['user_id']))
+        user = result.scalar_one_or_none()
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
         return user
@@ -195,549 +196,609 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-async def require_admin(user = Depends(get_current_user)):
-    if user['role'] != 'admin':
+async def require_admin(user: User = Depends(get_current_user)):
+    if user.role != 'admin':
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
 # Auth routes
 @api_router.post("/auth/register")
-async def register(data: UserRegister):
-    existing = await db.users.find_one({'email': data.email})
-    if existing:
+async def register(data: UserRegister, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email == data.email))
+    if result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Email already registered")
     
-    user_id = str(uuid.uuid4())
-    user_doc = {
-        'id': user_id,
-        'email': data.email,
-        'password': hash_password(data.password),
-        'name': data.name,
-        'role': 'customer',
-        'wishlist': [],
-        'created_at': datetime.now(timezone.utc).isoformat()
-    }
-    await db.users.insert_one(user_doc)
+    user = User(
+        id=str(uuid.uuid4()),
+        email=data.email,
+        password=hash_password(data.password),
+        name=data.name,
+        role='customer',
+        wishlist=[],
+        created_at=datetime.now(timezone.utc).isoformat()
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
     
-    token = create_token(user_id, data.email, 'customer')
-    return {'token': token, 'user': {'id': user_id, 'email': data.email, 'name': data.name, 'role': 'customer'}}
+    token = create_token(user.id, user.email, user.role)
+    return {'token': token, 'user': {'id': user.id, 'email': user.email, 'name': user.name, 'role': user.role}}
 
 @api_router.post("/auth/login")
-async def login(data: UserLogin):
-    user = await db.users.find_one({'email': data.email}, {'_id': 0})
-    if not user or not verify_password(data.password, user['password']):
+async def login(data: UserLogin, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email == data.email))
+    user = result.scalar_one_or_none()
+    if not user or not verify_password(data.password, user.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    token = create_token(user['id'], user['email'], user['role'])
-    return {'token': token, 'user': {'id': user['id'], 'email': user['email'], 'name': user['name'], 'role': user['role']}}
+    token = create_token(user.id, user.email, user.role)
+    return {'token': token, 'user': {'id': user.id, 'email': user.email, 'name': user.name, 'role': user.role}}
 
 @api_router.get("/auth/me", response_model=UserResponse)
-async def get_me(user = Depends(get_current_user)):
-    return UserResponse(**user)
+async def get_me(user: User = Depends(get_current_user)):
+    return UserResponse(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        role=user.role,
+        wishlist=user.wishlist or []
+    )
 
 # Categories
 @api_router.post("/categories", response_model=CategoryResponse)
-async def create_category(data: CategoryCreate, admin = Depends(require_admin)):
-    category_id = str(uuid.uuid4())
-    doc = data.model_dump()
-    doc['id'] = category_id
-    doc['created_at'] = datetime.now(timezone.utc).isoformat()
-    await db.categories.insert_one(doc)
-    return CategoryResponse(**doc)
+async def create_category(data: CategoryCreate, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    category = Category(id=str(uuid.uuid4()), **data.model_dump(), created_at=datetime.now(timezone.utc).isoformat())
+    db.add(category)
+    await db.commit()
+    await db.refresh(category)
+    return CategoryResponse(**category.__dict__)
 
 @api_router.get("/categories", response_model=List[CategoryResponse])
-async def get_categories(active_only: bool = False):
-    query = {'active': True} if active_only else {}
-    categories = await db.categories.find(query, {'_id': 0}).to_list(1000)
-    return [CategoryResponse(**cat) for cat in categories]
+async def get_categories(active_only: bool = False, db: AsyncSession = Depends(get_db)):
+    query = select(Category)
+    if active_only:
+        query = query.where(Category.active == True)
+    result = await db.execute(query)
+    categories = result.scalars().all()
+    return [CategoryResponse(**cat.__dict__) for cat in categories]
 
 @api_router.get("/categories/{category_id}", response_model=CategoryResponse)
-async def get_category(category_id: str):
-    category = await db.categories.find_one({'id': category_id}, {'_id': 0})
+async def get_category(category_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Category).where(Category.id == category_id))
+    category = result.scalar_one_or_none()
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
-    return CategoryResponse(**category)
+    return CategoryResponse(**category.__dict__)
 
 @api_router.put("/categories/{category_id}", response_model=CategoryResponse)
-async def update_category(category_id: str, data: CategoryCreate, admin = Depends(require_admin)):
-    result = await db.categories.update_one(
-        {'id': category_id},
-        {'$set': data.model_dump()}
-    )
-    if result.matched_count == 0:
+async def update_category(category_id: str, data: CategoryCreate, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    result = await db.execute(select(Category).where(Category.id == category_id))
+    category = result.scalar_one_or_none()
+    if not category:
         raise HTTPException(status_code=404, detail="Category not found")
-    updated = await db.categories.find_one({'id': category_id}, {'_id': 0})
-    return CategoryResponse(**updated)
+    
+    for key, value in data.model_dump().items():
+        setattr(category, key, value)
+    await db.commit()
+    await db.refresh(category)
+    return CategoryResponse(**category.__dict__)
 
 @api_router.delete("/categories/{category_id}")
-async def delete_category(category_id: str, admin = Depends(require_admin)):
-    result = await db.categories.delete_one({'id': category_id})
-    if result.deleted_count == 0:
+async def delete_category(category_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    result = await db.execute(select(Category).where(Category.id == category_id))
+    category = result.scalar_one_or_none()
+    if not category:
         raise HTTPException(status_code=404, detail="Category not found")
+    await db.delete(category)
+    await db.commit()
     return {'message': 'Category deleted'}
 
 # Products
 @api_router.post("/products", response_model=ProductResponse)
-async def create_product(data: ProductCreate, admin = Depends(require_admin)):
-    product_id = str(uuid.uuid4())
-    doc = data.model_dump()
-    doc['id'] = product_id
-    doc['ratings_avg'] = 0
-    doc['ratings_count'] = 0
-    doc['created_at'] = datetime.now(timezone.utc).isoformat()
-    await db.products.insert_one(doc)
-    return ProductResponse(**doc)
+async def create_product(data: ProductCreate, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    product = Product(
+        id=str(uuid.uuid4()),
+        **data.model_dump(),
+        ratings_avg=0,
+        ratings_count=0,
+        created_at=datetime.now(timezone.utc).isoformat()
+    )
+    db.add(product)
+    await db.commit()
+    await db.refresh(product)
+    return ProductResponse(**product.__dict__)
 
 @api_router.get("/products", response_model=List[ProductResponse])
 async def get_products(
-    category_id: Optional[str] = None, 
-    search: Optional[str] = None, 
+    category_id: Optional[str] = None,
+    search: Optional[str] = None,
     active_only: bool = True,
     page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100)
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db)
 ):
-    query = {}
+    query = select(Product)
     if active_only:
-        query['active'] = True
+        query = query.where(Product.active == True)
     if category_id:
-        query['category_id'] = category_id
+        query = query.where(Product.category_id == category_id)
     if search:
-        query['$or'] = [{'name': {'$regex': search, '$options': 'i'}}, {'description': {'$regex': search, '$options': 'i'}}]
+        query = query.where(or_(
+            Product.name.ilike(f'%{search}%'),
+            Product.description.ilike(f'%{search}%')
+        ))
     
-    skip = (page - 1) * limit
-    products = await db.products.find(query, {'_id': 0}).sort('created_at', -1).skip(skip).limit(limit).to_list(limit)
-    return [ProductResponse(**prod) for prod in products]
+    query = query.order_by(Product.created_at.desc()).offset((page - 1) * limit).limit(limit)
+    result = await db.execute(query)
+    products = result.scalars().all()
+    return [ProductResponse(**prod.__dict__) for prod in products]
 
 @api_router.get("/products/{product_id}", response_model=ProductResponse)
-async def get_product(product_id: str):
-    product = await db.products.find_one({'id': product_id}, {'_id': 0})
+async def get_product(product_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Product).where(Product.id == product_id))
+    product = result.scalar_one_or_none()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
-    return ProductResponse(**product)
+    return ProductResponse(**product.__dict__)
 
 @api_router.put("/products/{product_id}", response_model=ProductResponse)
-async def update_product(product_id: str, data: ProductCreate, admin = Depends(require_admin)):
-    result = await db.products.update_one(
-        {'id': product_id},
-        {'$set': data.model_dump()}
-    )
-    if result.matched_count == 0:
+async def update_product(product_id: str, data: ProductCreate, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    result = await db.execute(select(Product).where(Product.id == product_id))
+    product = result.scalar_one_or_none()
+    if not product:
         raise HTTPException(status_code=404, detail="Product not found")
-    updated = await db.products.find_one({'id': product_id}, {'_id': 0})
-    return ProductResponse(**updated)
+    
+    for key, value in data.model_dump().items():
+        setattr(product, key, value)
+    await db.commit()
+    await db.refresh(product)
+    return ProductResponse(**product.__dict__)
 
 @api_router.delete("/products/{product_id}")
-async def delete_product(product_id: str, admin = Depends(require_admin)):
-    result = await db.products.delete_one({'id': product_id})
-    if result.deleted_count == 0:
+async def delete_product(product_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    result = await db.execute(select(Product).where(Product.id == product_id))
+    product = result.scalar_one_or_none()
+    if not product:
         raise HTTPException(status_code=404, detail="Product not found")
+    await db.delete(product)
+    await db.commit()
     return {'message': 'Product deleted'}
-
 
 # Product Recommendations
 @api_router.get("/products/{product_id}/recommendations", response_model=List[ProductResponse])
-async def get_product_recommendations(product_id: str, limit: int = Query(4, ge=1, le=20)):
-    """Get product recommendations (simple: same category + popular)"""
-    product = await db.products.find_one({'id': product_id}, {'_id': 0})
+async def get_product_recommendations(product_id: str, limit: int = Query(4, ge=1, le=20), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Product).where(Product.id == product_id))
+    product = result.scalar_one_or_none()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     
-    # Get products from same category, sorted by ratings
-    recommendations = await db.products.find(
-        {
-            'category_id': product['category_id'],
-            'id': {'$ne': product_id},
-            'active': True
-        },
-        {'_id': 0}
-    ).sort([('ratings_avg', -1), ('ratings_count', -1)]).limit(limit).to_list(limit)
+    query = select(Product).where(
+        and_(
+            Product.category_id == product.category_id,
+            Product.id != product_id,
+            Product.active == True
+        )
+    ).order_by(Product.ratings_avg.desc(), Product.ratings_count.desc()).limit(limit)
     
-    return [ProductResponse(**prod) for prod in recommendations]
+    result = await db.execute(query)
+    recommendations = result.scalars().all()
+    return [ProductResponse(**prod.__dict__) for prod in recommendations]
 
 @api_router.get("/recommendations/popular", response_model=List[ProductResponse])
-async def get_popular_products(limit: int = Query(8, ge=1, le=20)):
-    """Get popular products based on ratings and order frequency"""
-    # Get products with highest ratings
-    products = await db.products.find(
-        {'active': True, 'ratings_count': {'$gt': 0}},
-        {'_id': 0}
-    ).sort([('ratings_avg', -1), ('ratings_count', -1)]).limit(limit).to_list(limit)
+async def get_popular_products(limit: int = Query(8, ge=1, le=20), db: AsyncSession = Depends(get_db)):
+    query = select(Product).where(
+        and_(Product.active == True, Product.ratings_count > 0)
+    ).order_by(Product.ratings_avg.desc(), Product.ratings_count.desc()).limit(limit)
     
-    return [ProductResponse(**prod) for prod in products]
+    result = await db.execute(query)
+    products = result.scalars().all()
+    return [ProductResponse(**prod.__dict__) for prod in products]
 
 @api_router.get("/recommendations/personalized", response_model=List[ProductResponse])
-async def get_personalized_recommendations(user = Depends(get_current_user), limit: int = Query(8, ge=1, le=20)):
-    """Get personalized recommendations based on user's order history"""
+async def get_personalized_recommendations(user: User = Depends(get_current_user), limit: int = Query(8, ge=1, le=20), db: AsyncSession = Depends(get_db)):
     # Get user's past orders
-    user_orders = await db.orders.find({'user_id': user['id']}, {'_id': 0}).to_list(100)
+    result = await db.execute(select(Order).where(Order.user_id == user.id))
+    user_orders = result.scalars().all()
     
     if not user_orders:
-        # Fallback to popular products if no order history
-        return await get_popular_products(limit)
+        return await get_popular_products(limit, db)
     
-    # Extract categories from ordered products
+    # Extract ordered product IDs
     ordered_product_ids = set()
-    category_frequency = {}
-    
     for order in user_orders:
-        for item in order.get('items', []):
+        for item in order.items:
             ordered_product_ids.add(item.get('product_id'))
     
     # Get categories from ordered products
-    ordered_products = await db.products.find(
-        {'id': {'$in': list(ordered_product_ids)}},
-        {'_id': 0, 'category_id': 1}
-    ).to_list(1000)
+    result = await db.execute(
+        select(Product.category_id, func.count(Product.id).label('count'))
+        .where(Product.id.in_(list(ordered_product_ids)))
+        .group_by(Product.category_id)
+        .order_by(func.count(Product.id).desc())
+        .limit(3)
+    )
+    top_categories = [row[0] for row in result.all()]
     
-    for prod in ordered_products:
-        cat_id = prod.get('category_id')
-        category_frequency[cat_id] = category_frequency.get(cat_id, 0) + 1
+    # Recommend products from favorite categories
+    query = select(Product).where(
+        and_(
+            Product.category_id.in_(top_categories),
+            Product.id.notin_(list(ordered_product_ids)),
+            Product.active == True
+        )
+    ).order_by(Product.ratings_avg.desc(), Product.ratings_count.desc()).limit(limit)
     
-    # Get top categories
-    top_categories = sorted(category_frequency.items(), key=lambda x: x[1], reverse=True)[:3]
-    top_category_ids = [cat[0] for cat in top_categories]
-    
-    # Recommend products from favorite categories that user hasn't ordered
-    recommendations = await db.products.find(
-        {
-            'category_id': {'$in': top_category_ids},
-            'id': {'$nin': list(ordered_product_ids)},
-            'active': True
-        },
-        {'_id': 0}
-    ).sort([('ratings_avg', -1), ('ratings_count', -1)]).limit(limit).to_list(limit)
-    
-    return [ProductResponse(**prod) for prod in recommendations]
+    result = await db.execute(query)
+    recommendations = result.scalars().all()
+    return [ProductResponse(**prod.__dict__) for prod in recommendations]
+
+# Continue in next message due to length...
 
 # Reviews
 @api_router.post("/reviews", response_model=ReviewResponse)
-async def create_review(data: ReviewCreate, user = Depends(get_current_user)):
-    review_id = str(uuid.uuid4())
-    doc = data.model_dump()
-    doc['id'] = review_id
-    doc['user_id'] = user['id']
-    doc['user_name'] = user['name']
-    doc['approved'] = False
-    doc['created_at'] = datetime.now(timezone.utc).isoformat()
-    await db.reviews.insert_one(doc)
-    return ReviewResponse(**doc)
+async def create_review(data: ReviewCreate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    review = Review(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        user_name=user.name,
+        approved=False,
+        created_at=datetime.now(timezone.utc).isoformat(),
+        **data.model_dump()
+    )
+    db.add(review)
+    await db.commit()
+    await db.refresh(review)
+    return ReviewResponse(**review.__dict__)
 
 @api_router.get("/reviews", response_model=List[ReviewResponse])
 async def get_reviews(
-    product_id: Optional[str] = None, 
+    product_id: Optional[str] = None,
     approved_only: bool = True,
     page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100)
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db)
 ):
-    query = {}
+    query = select(Review)
     if approved_only:
-        query['approved'] = True
+        query = query.where(Review.approved == True)
     if product_id:
-        query['product_id'] = product_id
+        query = query.where(Review.product_id == product_id)
     
-    skip = (page - 1) * limit
-    reviews = await db.reviews.find(query, {'_id': 0}).sort('created_at', -1).skip(skip).limit(limit).to_list(limit)
-    return [ReviewResponse(**rev) for rev in reviews]
+    query = query.order_by(Review.created_at.desc()).offset((page - 1) * limit).limit(limit)
+    result = await db.execute(query)
+    reviews = result.scalars().all()
+    return [ReviewResponse(**rev.__dict__) for rev in reviews]
 
 @api_router.put("/reviews/{review_id}/approve")
-async def approve_review(review_id: str, admin = Depends(require_admin)):
-    result = await db.reviews.update_one({'id': review_id}, {'$set': {'approved': True}})
-    if result.matched_count == 0:
+async def approve_review(review_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    result = await db.execute(select(Review).where(Review.id == review_id))
+    review = result.scalar_one_or_none()
+    if not review:
         raise HTTPException(status_code=404, detail="Review not found")
     
-    review = await db.reviews.find_one({'id': review_id}, {'_id': 0})
-    product_id = review['product_id']
+    review.approved = True
+    await db.commit()
     
-    pipeline = [
-        {'$match': {'product_id': product_id, 'approved': True}},
-        {'$group': {'_id': None, 'avg_rating': {'$avg': '$rating'}, 'count': {'$sum': 1}}}
-    ]
-    result = await db.reviews.aggregate(pipeline).to_list(1)
+    # Update product ratings
+    result = await db.execute(
+        select(func.avg(Review.rating), func.count(Review.id))
+        .where(and_(Review.product_id == review.product_id, Review.approved == True))
+    )
+    avg_rating, count = result.one()
     
-    if result:
-        await db.products.update_one(
-            {'id': product_id},
-            {'$set': {'ratings_avg': round(result[0]['avg_rating'], 1), 'ratings_count': result[0]['count']}}
-        )
+    await db.execute(
+        sql_update(Product)
+        .where(Product.id == review.product_id)
+        .values(ratings_avg=round(float(avg_rating), 1) if avg_rating else 0, ratings_count=count)
+    )
+    await db.commit()
     
     return {'message': 'Review approved'}
 
 @api_router.delete("/reviews/{review_id}")
-async def delete_review(review_id: str, admin = Depends(require_admin)):
-    result = await db.reviews.delete_one({'id': review_id})
-    if result.deleted_count == 0:
+async def delete_review(review_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    result = await db.execute(select(Review).where(Review.id == review_id))
+    review = result.scalar_one_or_none()
+    if not review:
         raise HTTPException(status_code=404, detail="Review not found")
+    await db.delete(review)
+    await db.commit()
     return {'message': 'Review deleted'}
 
 # Orders
 @api_router.post("/orders", response_model=OrderResponse)
-async def create_order(data: OrderCreate, user = Depends(get_current_user)):
-    order_id = str(uuid.uuid4())
-    doc = data.model_dump()
-    doc['id'] = order_id
-    doc['user_id'] = user['id']
-    doc['status'] = 'pending'
-    doc['created_at'] = datetime.now(timezone.utc).isoformat()
+async def create_order(data: OrderCreate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    order = Order(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        status='pending',
+        created_at=datetime.now(timezone.utc).isoformat(),
+        **data.model_dump()
+    )
     
     if data.coupon_code:
-        coupon = await db.coupons.find_one({'code': data.coupon_code, 'active': True}, {'_id': 0})
+        result = await db.execute(select(Coupon).where(and_(Coupon.code == data.coupon_code, Coupon.active == True)))
+        coupon = result.scalar_one_or_none()
         if coupon:
-            await db.coupons.update_one({'id': coupon['id']}, {'$inc': {'uses_count': 1}})
+            coupon.uses_count += 1
     
-    await db.orders.insert_one(doc)
+    db.add(order)
+    await db.commit()
+    await db.refresh(order)
     
     # Send order confirmation email
     try:
         html = get_order_confirmation_email(
-            order_id=order_id,
-            customer_name=user['name'],
+            order_id=order.id,
+            customer_name=user.name,
             total=data.total,
             items=data.items
         )
         await send_email(
-            to_email=user['email'],
-            subject=f"Order Confirmation - #{order_id[:8]}",
+            to_email=user.email,
+            subject=f"Order Confirmation - #{order.id[:8]}",
             html_content=html
         )
     except Exception as e:
-        logger.error(f"Failed to send order confirmation email: {e}")
+        logging.error(f"Failed to send order confirmation email: {e}")
     
-    return OrderResponse(**doc)
+    return OrderResponse(**order.__dict__)
 
 @api_router.get("/orders", response_model=List[OrderResponse])
 async def get_orders(
-    user = Depends(get_current_user),
+    user: User = Depends(get_current_user),
     page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100)
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db)
 ):
-    query = {'user_id': user['id']} if user['role'] != 'admin' else {}
-    skip = (page - 1) * limit
-    orders = await db.orders.find(query, {'_id': 0}).sort('created_at', -1).skip(skip).limit(limit).to_list(limit)
-    return [OrderResponse(**order) for order in orders]
+    query = select(Order)
+    if user.role != 'admin':
+        query = query.where(Order.user_id == user.id)
+    
+    query = query.order_by(Order.created_at.desc()).offset((page - 1) * limit).limit(limit)
+    result = await db.execute(query)
+    orders = result.scalars().all()
+    return [OrderResponse(**order.__dict__) for order in orders]
 
 @api_router.get("/orders/{order_id}", response_model=OrderResponse)
-async def get_order(order_id: str, user = Depends(get_current_user)):
-    order = await db.orders.find_one({'id': order_id}, {'_id': 0})
+async def get_order(order_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Order).where(Order.id == order_id))
+    order = result.scalar_one_or_none()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    if user['role'] != 'admin' and order['user_id'] != user['id']:
+    if user.role != 'admin' and order.user_id != user.id:
         raise HTTPException(status_code=403, detail="Access denied")
-    return OrderResponse(**order)
+    return OrderResponse(**order.__dict__)
 
 @api_router.put("/orders/{order_id}/status")
-async def update_order_status(order_id: str, status: str, admin = Depends(require_admin)):
-    result = await db.orders.update_one({'id': order_id}, {'$set': {'status': status}})
-    if result.matched_count == 0:
+async def update_order_status(order_id: str, status: str, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    result = await db.execute(select(Order).where(Order.id == order_id))
+    order = result.scalar_one_or_none()
+    if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    
+    order.status = status
+    await db.commit()
     
     # Send status update email
     try:
-        order = await db.orders.find_one({'id': order_id}, {'_id': 0})
-        user = await db.users.find_one({'id': order['user_id']}, {'_id': 0})
+        user_result = await db.execute(select(User).where(User.id == order.user_id))
+        user_obj = user_result.scalar_one_or_none()
         
-        if user and status in ['processing', 'shipped', 'delivered']:
+        if user_obj and status in ['processing', 'shipped', 'delivered']:
             html = get_order_status_email(
                 order_id=order_id,
-                customer_name=user['name'],
+                customer_name=user_obj.name,
                 status=status
             )
             await send_email(
-                to_email=user['email'],
+                to_email=user_obj.email,
                 subject=f"Order Update - #{order_id[:8]}",
                 html_content=html
             )
     except Exception as e:
-        logger.error(f"Failed to send order status email: {e}")
+        logging.error(f"Failed to send order status email: {e}")
     
     return {'message': 'Order status updated'}
 
 # Coupons
 @api_router.post("/coupons", response_model=CouponResponse)
-async def create_coupon(data: CouponCreate, admin = Depends(require_admin)):
-    coupon_id = str(uuid.uuid4())
-    doc = data.model_dump()
-    doc['id'] = coupon_id
-    doc['uses_count'] = 0
-    doc['active'] = True
-    await db.coupons.insert_one(doc)
-    return CouponResponse(**doc)
+async def create_coupon(data: CouponCreate, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    coupon = Coupon(id=str(uuid.uuid4()), uses_count=0, active=True, **data.model_dump())
+    db.add(coupon)
+    await db.commit()
+    await db.refresh(coupon)
+    return CouponResponse(**coupon.__dict__)
 
 @api_router.get("/coupons", response_model=List[CouponResponse])
-async def get_coupons(admin = Depends(require_admin)):
-    coupons = await db.coupons.find({}, {'_id': 0}).to_list(1000)
-    return [CouponResponse(**c) for c in coupons]
+async def get_coupons(db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    result = await db.execute(select(Coupon))
+    coupons = result.scalars().all()
+    return [CouponResponse(**c.__dict__) for c in coupons]
 
 @api_router.get("/coupons/validate/{code}")
-async def validate_coupon(code: str, total: float):
-    coupon = await db.coupons.find_one({'code': code, 'active': True}, {'_id': 0})
+async def validate_coupon(code: str, total: float, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Coupon).where(and_(Coupon.code == code, Coupon.active == True)))
+    coupon = result.scalar_one_or_none()
     if not coupon:
         raise HTTPException(status_code=404, detail="Coupon not found")
-    if coupon['min_purchase'] > total:
-        raise HTTPException(status_code=400, detail=f"Minimum purchase of {coupon['min_purchase']} required")
-    if coupon['max_uses'] > 0 and coupon['uses_count'] >= coupon['max_uses']:
+    if coupon.min_purchase > total:
+        raise HTTPException(status_code=400, detail=f"Minimum purchase of {coupon.min_purchase} required")
+    if coupon.max_uses > 0 and coupon.uses_count >= coupon.max_uses:
         raise HTTPException(status_code=400, detail="Coupon usage limit reached")
     
     discount = 0
-    if coupon['discount_type'] == 'percentage':
-        discount = (total * coupon['discount_value']) / 100
+    if coupon.discount_type == 'percentage':
+        discount = (total * coupon.discount_value) / 100
     else:
-        discount = coupon['discount_value']
+        discount = coupon.discount_value
     
     return {'valid': True, 'discount': discount, 'final_total': max(0, total - discount)}
 
 @api_router.delete("/coupons/{coupon_id}")
-async def delete_coupon(coupon_id: str, admin = Depends(require_admin)):
-    result = await db.coupons.delete_one({'id': coupon_id})
-    if result.deleted_count == 0:
+async def delete_coupon(coupon_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    result = await db.execute(select(Coupon).where(Coupon.id == coupon_id))
+    coupon = result.scalar_one_or_none()
+    if not coupon:
         raise HTTPException(status_code=404, detail="Coupon not found")
+    await db.delete(coupon)
+    await db.commit()
     return {'message': 'Coupon deleted'}
 
 # Banners
 @api_router.post("/banners", response_model=BannerResponse)
-async def create_banner(data: BannerCreate, admin = Depends(require_admin)):
-    banner_id = str(uuid.uuid4())
-    doc = data.model_dump()
-    doc['id'] = banner_id
-    await db.banners.insert_one(doc)
-    return BannerResponse(**doc)
+async def create_banner(data: BannerCreate, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    banner = Banner(id=str(uuid.uuid4()), **data.model_dump())
+    db.add(banner)
+    await db.commit()
+    await db.refresh(banner)
+    return BannerResponse(**banner.__dict__)
 
 @api_router.get("/banners", response_model=List[BannerResponse])
-async def get_banners(active_only: bool = True):
-    query = {'active': True} if active_only else {}
-    banners = await db.banners.find(query, {'_id': 0}).sort('position', 1).to_list(100)
-    return [BannerResponse(**b) for b in banners]
+async def get_banners(active_only: bool = True, db: AsyncSession = Depends(get_db)):
+    query = select(Banner)
+    if active_only:
+        query = query.where(Banner.active == True)
+    query = query.order_by(Banner.position)
+    result = await db.execute(query)
+    banners = result.scalars().all()
+    return [BannerResponse(**b.__dict__) for b in banners]
 
 @api_router.delete("/banners/{banner_id}")
-async def delete_banner(banner_id: str, admin = Depends(require_admin)):
-    result = await db.banners.delete_one({'id': banner_id})
-    if result.deleted_count == 0:
+async def delete_banner(banner_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    result = await db.execute(select(Banner).where(Banner.id == banner_id))
+    banner = result.scalar_one_or_none()
+    if not banner:
         raise HTTPException(status_code=404, detail="Banner not found")
+    await db.delete(banner)
+    await db.commit()
     return {'message': 'Banner deleted'}
 
 # Settings
 @api_router.get("/settings")
-async def get_settings():
-    settings = await db.settings.find_one({}, {'_id': 0})
+async def get_settings(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Settings))
+    settings = result.scalar_one_or_none()
     if not settings:
-        default_settings = {
-            'id': str(uuid.uuid4()),
-            'logo': '',
-            'footer_text': '© 2026 E-Shop. All rights reserved.',
-            'contact_email': 'support@eshop.com',
-            'contact_phone': '+1-234-567-8900',
-            'seo_title': 'E-Shop - Your Online Shopping Destination',
-            'seo_description': 'Shop the latest products at great prices'
-        }
-        await db.settings.insert_one(default_settings)
-        return default_settings
-    return settings
+        settings = Settings(
+            id=str(uuid.uuid4()),
+            logo='',
+            footer_text='\u00a9 2026 E-Shop. All rights reserved.',
+            contact_email='support@eshop.com',
+            contact_phone='+1-234-567-8900',
+            seo_title='E-Shop - Your Online Shopping Destination',
+            seo_description='Shop the latest products at great prices'
+        )
+        db.add(settings)
+        await db.commit()
+        await db.refresh(settings)
+    return settings.__dict__
 
 @api_router.put("/settings")
-async def update_settings(data: SettingsUpdate, admin = Depends(require_admin)):
-    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
-    await db.settings.update_one({}, {'$set': update_data}, upsert=True)
-    return await get_settings()
+async def update_settings(data: SettingsUpdate, db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    result = await db.execute(select(Settings))
+    settings = result.scalar_one_or_none()
+    
+    if not settings:
+        settings = Settings(id=str(uuid.uuid4()))
+        db.add(settings)
+    
+    for key, value in data.model_dump().items():
+        if value is not None:
+            setattr(settings, key, value)
+    
+    await db.commit()
+    await db.refresh(settings)
+    return settings.__dict__
 
 # Wishlist
 @api_router.post("/wishlist/{product_id}")
-async def add_to_wishlist(product_id: str, user = Depends(get_current_user)):
-    await db.users.update_one(
-        {'id': user['id']},
-        {'$addToSet': {'wishlist': product_id}}
-    )
+async def add_to_wishlist(product_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if product_id not in (user.wishlist or []):
+        user.wishlist = (user.wishlist or []) + [product_id]
+        await db.commit()
     return {'message': 'Added to wishlist'}
 
 @api_router.delete("/wishlist/{product_id}")
-async def remove_from_wishlist(product_id: str, user = Depends(get_current_user)):
-    await db.users.update_one(
-        {'id': user['id']},
-        {'$pull': {'wishlist': product_id}}
-    )
+async def remove_from_wishlist(product_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if product_id in (user.wishlist or []):
+        user.wishlist = [pid for pid in user.wishlist if pid != product_id]
+        await db.commit()
     return {'message': 'Removed from wishlist'}
 
 @api_router.get("/wishlist", response_model=List[ProductResponse])
-async def get_wishlist(user = Depends(get_current_user)):
-    user_data = await db.users.find_one({'id': user['id']}, {'_id': 0})
-    if not user_data or not user_data.get('wishlist'):
+async def get_wishlist(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not user.wishlist:
         return []
     
-    products = await db.products.find({'id': {'$in': user_data['wishlist']}}, {'_id': 0}).to_list(1000)
-    return [ProductResponse(**p) for p in products]
+    result = await db.execute(select(Product).where(Product.id.in_(user.wishlist)))
+    products = result.scalars().all()
+    return [ProductResponse(**p.__dict__) for p in products]
 
 # Admin stats
 @api_router.get("/admin/stats")
-async def get_admin_stats(admin = Depends(require_admin)):
-    total_products = await db.products.count_documents({})
-    total_orders = await db.orders.count_documents({})
-    total_customers = await db.users.count_documents({'role': 'customer'})
+async def get_admin_stats(db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    total_products = await db.scalar(select(func.count(Product.id)))
+    total_orders = await db.scalar(select(func.count(Order.id)))
+    total_customers = await db.scalar(select(func.count(User.id)).where(User.role == 'customer'))
+    total_revenue = await db.scalar(select(func.sum(Order.total))) or 0
     
-    pipeline = [
-        {'$group': {'_id': None, 'total_revenue': {'$sum': '$total'}}}
-    ]
-    revenue_result = await db.orders.aggregate(pipeline).to_list(1)
-    total_revenue = revenue_result[0]['total_revenue'] if revenue_result else 0
-    
-    recent_orders = await db.orders.find({}, {'_id': 0}).sort('created_at', -1).limit(10).to_list(10)
+    result = await db.execute(select(Order).order_by(Order.created_at.desc()).limit(10))
+    recent_orders = result.scalars().all()
     
     return {
         'total_products': total_products,
         'total_orders': total_orders,
         'total_customers': total_customers,
-        'total_revenue': total_revenue,
-        'recent_orders': recent_orders
+        'total_revenue': float(total_revenue),
+        'recent_orders': [OrderResponse(**o.__dict__).model_dump() for o in recent_orders]
     }
 
-# Image upload with Object Storage
+# Image upload
 @api_router.post("/upload")
-async def upload_image(file: UploadFile = File(...), admin = Depends(require_admin)):
+async def upload_image(file: UploadFile = File(...), db: AsyncSession = Depends(get_db), admin: User = Depends(require_admin)):
+    import base64
     try:
-        # Validate file type
         allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']
         if file.content_type not in allowed_types:
-            raise HTTPException(status_code=400, detail="Invalid file type. Only images allowed.")
+            raise HTTPException(status_code=400, detail="Invalid file type")
         
-        # Validate file size (max 5MB)
         contents = await file.read()
         if len(contents) > 5 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail="File too large. Max 5MB allowed.")
+            raise HTTPException(status_code=400, detail="File too large. Max 5MB")
         
-        # Generate unique filename
         ext = file.filename.split('.')[-1] if '.' in file.filename else 'jpg'
         filename = f"{uuid.uuid4()}.{ext}"
         storage_path = f"eshop/images/{filename}"
         
-        # Upload to object storage
         result = put_object(storage_path, contents, file.content_type)
         
-        # Store file metadata in database
-        file_doc = {
-            'id': str(uuid.uuid4()),
-            'storage_path': result['path'],
-            'original_filename': file.filename,
-            'content_type': file.content_type,
-            'size': result.get('size', len(contents)),
-            'is_deleted': False,
-            'created_at': datetime.now(timezone.utc).isoformat()
-        }
-        await db.files.insert_one(file_doc)
+        file_metadata = FileMetadata(
+            id=str(uuid.uuid4()),
+            storage_path=result['path'],
+            original_filename=file.filename,
+            content_type=file.content_type,
+            size=result.get('size', len(contents)),
+            is_deleted=False,
+            created_at=datetime.now(timezone.utc).isoformat()
+        )
+        db.add(file_metadata)
+        await db.commit()
         
-        # Return URL that points to our download endpoint
         return {
             'url': f"/api/files/{result['path']}",
-            'file_id': file_doc['id'],
-            'size': file_doc['size']
+            'file_id': file_metadata.id,
+            'size': file_metadata.size
         }
     except Exception as e:
-        logger.error(f"Image upload failed: {e}")
-        # Fallback to base64 if storage fails
+        logging.error(f"Image upload failed: {e}")
         base64_encoded = base64.b64encode(contents).decode('utf-8')
         return {'url': f"data:{file.content_type};base64,{base64_encoded}", 'fallback': True}
 
-# Download file from object storage
 @api_router.get("/files/{path:path}")
-async def download_file(path: str):
-    # Check if file exists in database
-    file_record = await db.files.find_one({'storage_path': path, 'is_deleted': False}, {'_id': 0})
+async def download_file(path: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(FileMetadata).where(and_(FileMetadata.storage_path == path, FileMetadata.is_deleted == False)))
+    file_record = result.scalar_one_or_none()
     if not file_record:
         raise HTTPException(status_code=404, detail="File not found")
     
@@ -745,14 +806,14 @@ async def download_file(path: str):
         data, content_type = get_object(path)
         return Response(
             content=data,
-            media_type=file_record.get('content_type', content_type),
+            media_type=file_record.content_type or content_type,
             headers={
                 'Cache-Control': 'public, max-age=31536000',
-                'Content-Disposition': f'inline; filename="{file_record.get("original_filename", "image.jpg")}"'
+                'Content-Disposition': f'inline; filename="{file_record.original_filename or "image.jpg"}"'
             }
         )
     except Exception as e:
-        logger.error(f"File download failed: {e}")
+        logging.error(f"File download failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to download file")
 
 app.include_router(api_router)
@@ -771,12 +832,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
-
 @app.on_event("startup")
-async def create_admin_user():
+async def startup_event():
     # Initialize object storage
     try:
         init_storage()
@@ -784,17 +841,4 @@ async def create_admin_user():
     except Exception as e:
         logger.warning(f"Storage initialization failed: {e}")
     
-    # Create default admin user
-    admin = await db.users.find_one({'email': 'admin@eshop.com'})
-    if not admin:
-        admin_doc = {
-            'id': str(uuid.uuid4()),
-            'email': 'admin@eshop.com',
-            'password': hash_password('admin123'),
-            'name': 'Admin',
-            'role': 'admin',
-            'wishlist': [],
-            'created_at': datetime.now(timezone.utc).isoformat()
-        }
-        await db.users.insert_one(admin_doc)
-        logger.info('Admin user created: admin@eshop.com / admin123')
+    logger.info("Supabase PostgreSQL connected successfully")
