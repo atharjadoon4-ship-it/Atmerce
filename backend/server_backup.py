@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Form, Query, Response
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -13,8 +13,6 @@ from datetime import datetime, timezone, timedelta
 import bcrypt
 import jwt
 import base64
-from storage import init_storage, put_object, get_object
-from email_service import send_email, get_order_confirmation_email, get_order_status_email
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -289,13 +287,7 @@ async def create_product(data: ProductCreate, admin = Depends(require_admin)):
     return ProductResponse(**doc)
 
 @api_router.get("/products", response_model=List[ProductResponse])
-async def get_products(
-    category_id: Optional[str] = None, 
-    search: Optional[str] = None, 
-    active_only: bool = True,
-    page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100)
-):
+async def get_products(category_id: Optional[str] = None, search: Optional[str] = None, active_only: bool = True):
     query = {}
     if active_only:
         query['active'] = True
@@ -304,8 +296,7 @@ async def get_products(
     if search:
         query['$or'] = [{'name': {'$regex': search, '$options': 'i'}}, {'description': {'$regex': search, '$options': 'i'}}]
     
-    skip = (page - 1) * limit
-    products = await db.products.find(query, {'_id': 0}).sort('created_at', -1).skip(skip).limit(limit).to_list(limit)
+    products = await db.products.find(query, {'_id': 0}).to_list(1000)
     return [ProductResponse(**prod) for prod in products]
 
 @api_router.get("/products/{product_id}", response_model=ProductResponse)
@@ -333,82 +324,6 @@ async def delete_product(product_id: str, admin = Depends(require_admin)):
         raise HTTPException(status_code=404, detail="Product not found")
     return {'message': 'Product deleted'}
 
-
-# Product Recommendations
-@api_router.get("/products/{product_id}/recommendations", response_model=List[ProductResponse])
-async def get_product_recommendations(product_id: str, limit: int = Query(4, ge=1, le=20)):
-    """Get product recommendations (simple: same category + popular)"""
-    product = await db.products.find_one({'id': product_id}, {'_id': 0})
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
-    
-    # Get products from same category, sorted by ratings
-    recommendations = await db.products.find(
-        {
-            'category_id': product['category_id'],
-            'id': {'$ne': product_id},
-            'active': True
-        },
-        {'_id': 0}
-    ).sort([('ratings_avg', -1), ('ratings_count', -1)]).limit(limit).to_list(limit)
-    
-    return [ProductResponse(**prod) for prod in recommendations]
-
-@api_router.get("/recommendations/popular", response_model=List[ProductResponse])
-async def get_popular_products(limit: int = Query(8, ge=1, le=20)):
-    """Get popular products based on ratings and order frequency"""
-    # Get products with highest ratings
-    products = await db.products.find(
-        {'active': True, 'ratings_count': {'$gt': 0}},
-        {'_id': 0}
-    ).sort([('ratings_avg', -1), ('ratings_count', -1)]).limit(limit).to_list(limit)
-    
-    return [ProductResponse(**prod) for prod in products]
-
-@api_router.get("/recommendations/personalized", response_model=List[ProductResponse])
-async def get_personalized_recommendations(user = Depends(get_current_user), limit: int = Query(8, ge=1, le=20)):
-    """Get personalized recommendations based on user's order history"""
-    # Get user's past orders
-    user_orders = await db.orders.find({'user_id': user['id']}, {'_id': 0}).to_list(100)
-    
-    if not user_orders:
-        # Fallback to popular products if no order history
-        return await get_popular_products(limit)
-    
-    # Extract categories from ordered products
-    ordered_product_ids = set()
-    category_frequency = {}
-    
-    for order in user_orders:
-        for item in order.get('items', []):
-            ordered_product_ids.add(item.get('product_id'))
-    
-    # Get categories from ordered products
-    ordered_products = await db.products.find(
-        {'id': {'$in': list(ordered_product_ids)}},
-        {'_id': 0, 'category_id': 1}
-    ).to_list(1000)
-    
-    for prod in ordered_products:
-        cat_id = prod.get('category_id')
-        category_frequency[cat_id] = category_frequency.get(cat_id, 0) + 1
-    
-    # Get top categories
-    top_categories = sorted(category_frequency.items(), key=lambda x: x[1], reverse=True)[:3]
-    top_category_ids = [cat[0] for cat in top_categories]
-    
-    # Recommend products from favorite categories that user hasn't ordered
-    recommendations = await db.products.find(
-        {
-            'category_id': {'$in': top_category_ids},
-            'id': {'$nin': list(ordered_product_ids)},
-            'active': True
-        },
-        {'_id': 0}
-    ).sort([('ratings_avg', -1), ('ratings_count', -1)]).limit(limit).to_list(limit)
-    
-    return [ProductResponse(**prod) for prod in recommendations]
-
 # Reviews
 @api_router.post("/reviews", response_model=ReviewResponse)
 async def create_review(data: ReviewCreate, user = Depends(get_current_user)):
@@ -423,20 +338,14 @@ async def create_review(data: ReviewCreate, user = Depends(get_current_user)):
     return ReviewResponse(**doc)
 
 @api_router.get("/reviews", response_model=List[ReviewResponse])
-async def get_reviews(
-    product_id: Optional[str] = None, 
-    approved_only: bool = True,
-    page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100)
-):
+async def get_reviews(product_id: Optional[str] = None, approved_only: bool = True):
     query = {}
     if approved_only:
         query['approved'] = True
     if product_id:
         query['product_id'] = product_id
     
-    skip = (page - 1) * limit
-    reviews = await db.reviews.find(query, {'_id': 0}).sort('created_at', -1).skip(skip).limit(limit).to_list(limit)
+    reviews = await db.reviews.find(query, {'_id': 0}).sort('created_at', -1).to_list(1000)
     return [ReviewResponse(**rev) for rev in reviews]
 
 @api_router.put("/reviews/{review_id}/approve")
@@ -485,34 +394,12 @@ async def create_order(data: OrderCreate, user = Depends(get_current_user)):
             await db.coupons.update_one({'id': coupon['id']}, {'$inc': {'uses_count': 1}})
     
     await db.orders.insert_one(doc)
-    
-    # Send order confirmation email
-    try:
-        html = get_order_confirmation_email(
-            order_id=order_id,
-            customer_name=user['name'],
-            total=data.total,
-            items=data.items
-        )
-        await send_email(
-            to_email=user['email'],
-            subject=f"Order Confirmation - #{order_id[:8]}",
-            html_content=html
-        )
-    except Exception as e:
-        logger.error(f"Failed to send order confirmation email: {e}")
-    
     return OrderResponse(**doc)
 
 @api_router.get("/orders", response_model=List[OrderResponse])
-async def get_orders(
-    user = Depends(get_current_user),
-    page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100)
-):
+async def get_orders(user = Depends(get_current_user)):
     query = {'user_id': user['id']} if user['role'] != 'admin' else {}
-    skip = (page - 1) * limit
-    orders = await db.orders.find(query, {'_id': 0}).sort('created_at', -1).skip(skip).limit(limit).to_list(limit)
+    orders = await db.orders.find(query, {'_id': 0}).sort('created_at', -1).to_list(1000)
     return [OrderResponse(**order) for order in orders]
 
 @api_router.get("/orders/{order_id}", response_model=OrderResponse)
@@ -529,26 +416,6 @@ async def update_order_status(order_id: str, status: str, admin = Depends(requir
     result = await db.orders.update_one({'id': order_id}, {'$set': {'status': status}})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Order not found")
-    
-    # Send status update email
-    try:
-        order = await db.orders.find_one({'id': order_id}, {'_id': 0})
-        user = await db.users.find_one({'id': order['user_id']}, {'_id': 0})
-        
-        if user and status in ['processing', 'shipped', 'delivered']:
-            html = get_order_status_email(
-                order_id=order_id,
-                customer_name=user['name'],
-                status=status
-            )
-            await send_email(
-                to_email=user['email'],
-                subject=f"Order Update - #{order_id[:8]}",
-                html_content=html
-            )
-    except Exception as e:
-        logger.error(f"Failed to send order status email: {e}")
-    
     return {'message': 'Order status updated'}
 
 # Coupons
@@ -687,73 +554,13 @@ async def get_admin_stats(admin = Depends(require_admin)):
         'recent_orders': recent_orders
     }
 
-# Image upload with Object Storage
+# Image upload
 @api_router.post("/upload")
 async def upload_image(file: UploadFile = File(...), admin = Depends(require_admin)):
-    try:
-        # Validate file type
-        allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']
-        if file.content_type not in allowed_types:
-            raise HTTPException(status_code=400, detail="Invalid file type. Only images allowed.")
-        
-        # Validate file size (max 5MB)
-        contents = await file.read()
-        if len(contents) > 5 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail="File too large. Max 5MB allowed.")
-        
-        # Generate unique filename
-        ext = file.filename.split('.')[-1] if '.' in file.filename else 'jpg'
-        filename = f"{uuid.uuid4()}.{ext}"
-        storage_path = f"eshop/images/{filename}"
-        
-        # Upload to object storage
-        result = put_object(storage_path, contents, file.content_type)
-        
-        # Store file metadata in database
-        file_doc = {
-            'id': str(uuid.uuid4()),
-            'storage_path': result['path'],
-            'original_filename': file.filename,
-            'content_type': file.content_type,
-            'size': result.get('size', len(contents)),
-            'is_deleted': False,
-            'created_at': datetime.now(timezone.utc).isoformat()
-        }
-        await db.files.insert_one(file_doc)
-        
-        # Return URL that points to our download endpoint
-        return {
-            'url': f"/api/files/{result['path']}",
-            'file_id': file_doc['id'],
-            'size': file_doc['size']
-        }
-    except Exception as e:
-        logger.error(f"Image upload failed: {e}")
-        # Fallback to base64 if storage fails
-        base64_encoded = base64.b64encode(contents).decode('utf-8')
-        return {'url': f"data:{file.content_type};base64,{base64_encoded}", 'fallback': True}
-
-# Download file from object storage
-@api_router.get("/files/{path:path}")
-async def download_file(path: str):
-    # Check if file exists in database
-    file_record = await db.files.find_one({'storage_path': path, 'is_deleted': False}, {'_id': 0})
-    if not file_record:
-        raise HTTPException(status_code=404, detail="File not found")
-    
-    try:
-        data, content_type = get_object(path)
-        return Response(
-            content=data,
-            media_type=file_record.get('content_type', content_type),
-            headers={
-                'Cache-Control': 'public, max-age=31536000',
-                'Content-Disposition': f'inline; filename="{file_record.get("original_filename", "image.jpg")}"'
-            }
-        )
-    except Exception as e:
-        logger.error(f"File download failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to download file")
+    contents = await file.read()
+    base64_encoded = base64.b64encode(contents).decode('utf-8')
+    image_url = f"data:{file.content_type};base64,{base64_encoded}"
+    return {'url': image_url}
 
 app.include_router(api_router)
 
@@ -777,14 +584,6 @@ async def shutdown_db_client():
 
 @app.on_event("startup")
 async def create_admin_user():
-    # Initialize object storage
-    try:
-        init_storage()
-        logger.info("Object storage initialized")
-    except Exception as e:
-        logger.warning(f"Storage initialization failed: {e}")
-    
-    # Create default admin user
     admin = await db.users.find_one({'email': 'admin@eshop.com'})
     if not admin:
         admin_doc = {

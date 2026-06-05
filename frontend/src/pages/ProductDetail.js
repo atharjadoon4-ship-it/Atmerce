@@ -17,6 +17,7 @@ const ProductDetail = () => {
   const { user, token } = useAuth();
   const [product, setProduct] = useState(null);
   const [reviews, setReviews] = useState([]);
+  const [recommendations, setRecommendations] = useState([]);
   const [quantity, setQuantity] = useState(1);
   const [loading, setLoading] = useState(true);
   const [reviewForm, setReviewForm] = useState({ rating: 5, comment: '' });
@@ -33,8 +34,12 @@ const ProductDetail = () => {
       const foundProduct = productsRes.data.find(p => p.slug === slug);
       if (foundProduct) {
         setProduct(foundProduct);
-        const reviewsRes = await axios.get(`${API}/reviews?product_id=${foundProduct.id}&approved_only=true`);
+        const [reviewsRes, recommendationsRes] = await Promise.all([
+          axios.get(`${API}/reviews?product_id=${foundProduct.id}&approved_only=true`),
+          axios.get(`${API}/products/${foundProduct.id}/recommendations?limit=4`)
+        ]);
         setReviews(reviewsRes.data);
+        setRecommendations(recommendationsRes.data);
       }
     } catch (error) {
       console.error('Failed to fetch product:', error);
@@ -325,6 +330,51 @@ const ProductDetail = () => {
             )}
           </div>
         </div>
+
+        {recommendations.length > 0 && (
+          <div className="mt-16 border-t border-gray-200 dark:border-gray-800 pt-16">
+            <h2 className="text-3xl font-black tracking-tight text-gray-900 dark:text-white mb-8">You May Also Like</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6" data-testid="recommendations-grid">
+              {recommendations.map((rec) => (
+                <a
+                  key={rec.id}
+                  href={`/products/${rec.slug}`}
+                  className="group bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden hover:-translate-y-1 hover:shadow-lg transition-all duration-200"
+                  data-testid={`recommendation-${rec.slug}`}
+                >
+                  <div className="aspect-square overflow-hidden">
+                    <img
+                      src={rec.images[0] || 'https://images.unsplash.com/photo-1515940175183-6798529cb860?crop=entropy&cs=srgb&fm=jpg&q=85'}
+                      alt={rec.name}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                    />
+                  </div>
+                  <div className="p-4">
+                    <h3 className="font-semibold text-gray-900 dark:text-white mb-2 line-clamp-2">{rec.name}</h3>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        {rec.discount_price ? (
+                          <div className="flex items-center space-x-2">
+                            <span className="text-lg font-bold text-orange-500">${rec.discount_price}</span>
+                            <span className="text-sm text-gray-500 line-through">${rec.price}</span>
+                          </div>
+                        ) : (
+                          <span className="text-lg font-bold text-gray-900 dark:text-white">${rec.price}</span>
+                        )}
+                      </div>
+                      {rec.ratings_count > 0 && (
+                        <div className="flex items-center space-x-1">
+                          <Star className="w-4 h-4 fill-orange-500 text-orange-500" />
+                          <span className="text-sm text-gray-600 dark:text-gray-400">{rec.ratings_avg}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <Footer />
