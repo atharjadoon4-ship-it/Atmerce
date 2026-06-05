@@ -1,0 +1,164 @@
+{
+  "project_metadata": {
+    "domain": "E-commerce",
+    "theme": "Light (Primary) with Dark Mode support",
+    "archetype": "4 (Swiss & High-Contrast)",
+    "tone": "Trusted, expansive, highly functional, clean, premium",
+    "notes": "Anti-default e-commerce. Less cluttered than Amazon, more intentional and clear. High contrast for readability. Admin panel optimized for data density."
+  },
+  "typography": {
+    "fonts": {
+      "headings": {
+        "family": "Outfit",
+        "weight_strategy": "Radical weight contrast (Black vs Light). Tracking tight.",
+        "usage": "H1-H4, promotional banners, hero sections."
+      },
+      "body": {
+        "family": "IBM Plex Sans",
+        "weight_strategy": "Regular for reading, Medium for labels.",
+        "usage": "Paragraphs, admin tables, product descriptions, forms."
+      }
+    },
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tight leading-none",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight leading-none",
+      "h3": "text-xl sm:text-2xl tracking-tight",
+      "h4": "text-lg sm:text-xl",
+      "body": "text-base leading-relaxed",
+      "labels": "text-xs tracking-[0.2em] uppercase font-medium"
+    }
+  },
+  "colors": {
+    "light": {
+      "background": {
+        "primary": "#FFFFFF",
+        "secondary": "#F9FAFB",
+        "tertiary": "#F3F4F6"
+      },
+      "text": {
+        "primary": "#0A0A0A",
+        "secondary": "#4B5563",
+        "disabled": "#9CA3AF"
+      },
+      "brand": {
+        "primary": "#FF9900",
+        "hover": "#E68A00",
+        "active": "#CC7A00"
+      },
+      "status": {
+        "success": "#10B981",
+        "warning": "#F59E0B",
+        "error": "#EF4444",
+        "info": "#3B82F6"
+      },
+      "borders": "#E5E7EB"
+    },
+    "dark": {
+      "background": {
+        "primary": "#0A0A0A",
+        "secondary": "#111827",
+        "tertiary": "#1F2937"
+      },
+      "text": {
+        "primary": "#F9FAFB",
+        "secondary": "#9CA3AF",
+        "disabled": "#4B5563"
+      },
+      "brand": {
+        "primary": "#FF9900",
+        "hover": "#FFB347",
+        "active": "#FFC477"
+      },
+      "borders": "#374151"
+    }
+  },
+  "surfaces_and_shadows": {
+    "storefront": {
+      "cards": "Flat background, 1px solid border (border-border), no shadow by default. Hover: slight lift (-translate-y-1) and subtle shadow.",
+      "header": "Crystal Glassmorphism: backdrop-blur-xl bg-white/70 (Light) or bg-black/60 (Dark), 1px delicate inner stroke on bottom.",
+      "overlays": "Hero images get max bg-black/40 overlay. Gradient overlays preferred over flat blankets."
+    },
+    "admin_dashboard": {
+      "style": "Grid Borders (The Technical Look). Dense data layouts.",
+      "cards": "Flat solid, max 4px border-radius, pure structural grayscale.",
+      "tables": "border-collapse style layout. Subtle right and bottom borders on grid cells."
+    }
+  },
+  "layout_and_spacing": {
+    "storefront": {
+      "strategy": "Generous Spacing (p-8, p-12, p-16). Bento grid for categories. Horizontal scroll for featured products.",
+      "hero": "Asymmetrical layout. Large product imagery overlapping containers."
+    },
+    "admin_dashboard": {
+      "strategy": "Control Room Grid. Tight gaps (gap-4, gap-6). Dense spacing (p-4, p-6).",
+      "grid": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4. Summary metrics col-span-1, Main charts col-span-2 or 3."
+    }
+  },
+  "components": {
+    "strategy": "Shadcn UI for logic/forms heavily customized. Custom raw HTML+Tailwind for storefront bento layouts.",
+    "buttons": "Square or slight rounded (max 4px). Brand color only for primary CTAs (Add to Cart, Checkout, Save).",
+    "inputs": "Flat, 1px border. Focus state must have higher contrast (ring-2 ring-brand).",
+    "charts": "Recharts / Shadcn charts. High clarity. Accessible colors."
+  },
+  "motion": {
+    "scroll": "Use Lenis for momentum scrolling on storefront.",
+    "hover": "Explicit hover states (hover:text-white). Color shift to lighter hue.",
+    "transitions": "Specific property transitions (e.g., transition: transform 0.2s ease, opacity 0.2s ease)."
+  },
+  "icons_and_assets": {
+    "library": "lucide-react (default) for admin. @phosphor-icons/react for storefront.",
+    "imagery_rules": "No pure empty backgrounds. Focus on product in context. Image height max 80vh on mobile."
+  },
+  "testing": {
+    "attributes": "All interactive elements MUST have data-testid attributes (kebab-case, role-based)."
+  },
+  "media": {
+    "products": [
+      {
+        "url": "https://images.unsplash.com/photo-1515940175183-6798529cb860?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MDV8MHwxfHNlYXJjaHw0fHxtb2Rlcm4lMjB0ZWNoJTIwZ2FkZ2V0c3xlbnwwfHx8fDE3ODA2NjYzMzN8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Sony headphones and smartphone case",
+        "category": "featured_product"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1504610926078-a1611febcad3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MDV8MHwxfHNlYXJjaHwzfHxtb2Rlcm4lMjB0ZWNoJTIwZ2FkZ2V0c3xlbnwwfHx8fDE3ODA2NjYzMzN8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Jet black iPhone 7 and watch",
+        "category": "product_thumbnail"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1615655406736-b37c4fabf923?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MDV8MHwxfHNlYXJjaHwyfHxtb2Rlcm4lMjB0ZWNoJTIwZ2FkZ2V0c3xlbnwwfHx8fDE3ODA2NjYzMzN8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Black electronics table",
+        "category": "category_banner"
+      }
+    ],
+    "lifestyle": [
+      {
+        "url": "https://images.unsplash.com/photo-1583847268964-b28dc8f51f92?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNzl8MHwxfHNlYXJjaHwxfHxtaW5pbWFsaXN0JTIwaG9tZSUyMGRlY29yfGVufDB8fHx8MTc4MDY2NjMzM3ww&ixlib=rb-4.1.0&q=85",
+        "description": "Living room filled with furniture",
+        "category": "home_hero"
+      },
+      {
+        "url": "https://images.pexels.com/photos/1125131/pexels-photo-1125131.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Modern decorative ladder with hanging blanket",
+        "category": "category_thumbnail"
+      }
+    ],
+    "logos": [
+      {
+        "url": "https://images.pexels.com/photos/26576975/pexels-photo-26576975.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Minimalist Favour Media logo",
+        "category": "brand_logo"
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Use Shadcn components heavily for the Admin Dashboard (Tables, Cards, Charts).",
+    "For the Storefront Homepage, build custom bento layouts using raw HTML+Tailwind for a premium feel (avoiding standard Bootstrap column looks).",
+    "Integrate Supabase Auth and Supabase Storage as requested.",
+    "Implement light and dark mode toggles.",
+    "All navigation elements must be visible on desktop, no hamburger menus on large screens.",
+    "Ensure 'data-testid' is present on all interactive elements (e.g. data-testid='add-to-cart-btn').",
+    "Keep spacing dense on the Admin Panel but generous on the Storefront.",
+    "Avoid Inter for headings. Use Outfit (Headings) and IBM Plex Sans (Body).",
+    "Ensure contrast ratios meet accessibility standards, especially when text is over imagery."
+  ]
+}
