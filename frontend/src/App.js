@@ -23,6 +23,8 @@ import AdminReviews from '@/pages/admin/AdminReviews';
 import AdminCoupons from '@/pages/admin/AdminCoupons';
 import AdminBanners from '@/pages/admin/AdminBanners';
 import AdminSettings from '@/pages/admin/AdminSettings';
+import SellerDashboard from '@/pages/SellerDashboard';
+import SellerRegister from '@/pages/SellerRegister';
 import '@/App.css';
 
 function App() {
@@ -51,6 +53,8 @@ function App() {
               <Route path="/admin/coupons" element={<AdminCoupons />} />
               <Route path="/admin/banners" element={<AdminBanners />} />
               <Route path="/admin/settings" element={<AdminSettings />} />
+              <Route path="/seller" element={<SellerDashboard />} />
+              <Route path="/seller/register" element={<SellerRegister />} />
             </Routes>
             <Toaster />
           </BrowserRouter>
