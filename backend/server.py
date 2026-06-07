@@ -841,4 +841,44 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Storage initialization failed: {e}")
     
+    # Seed admin and seller users if they don't exist
+    from database import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        try:
+            # Check and create admin user
+            result = await db.execute(select(User).where(User.email == 'admin@eshop.com'))
+            admin = result.scalar_one_or_none()
+            if not admin:
+                admin = User(
+                    id=str(uuid.uuid4()),
+                    email='admin@eshop.com',
+                    password=hash_password('admin123'),
+                    name='Admin User',
+                    role='admin',
+                    wishlist=[],
+                    created_at=datetime.now(timezone.utc).isoformat()
+                )
+                db.add(admin)
+                logger.info("Admin user seeded")
+            
+            # Check and create seller user
+            result = await db.execute(select(User).where(User.email == 'seller@eshop.com'))
+            seller = result.scalar_one_or_none()
+            if not seller:
+                seller = User(
+                    id=str(uuid.uuid4()),
+                    email='seller@eshop.com',
+                    password=hash_password('seller123'),
+                    name='Seller User',
+                    role='seller',
+                    wishlist=[],
+                    created_at=datetime.now(timezone.utc).isoformat()
+                )
+                db.add(seller)
+                logger.info("Seller user seeded")
+            
+            await db.commit()
+        except Exception as e:
+            logger.error(f"User seeding failed: {e}")
+    
     logger.info("Supabase PostgreSQL connected successfully")

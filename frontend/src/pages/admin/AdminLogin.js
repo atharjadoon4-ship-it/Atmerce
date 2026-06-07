@@ -17,11 +17,16 @@ const AdminLogin = () => {
     setLoading(true);
     try {
       const user = await login(formData.email, formData.password);
-      if (user.role === 'admin') {
-        toast.success('Welcome Admin!');
+      
+      // Redirect based on role
+      if (user.role === 'admin' || user.role === 'seller') {
+        toast.success(`Welcome ${user.role === 'admin' ? 'Admin' : 'Seller'}!`);
         navigate('/admin');
+      } else if (user.role === 'customer') {
+        toast.success('Welcome!');
+        navigate('/buyer/dashboard');
       } else {
-        toast.error('Access denied: Admin privileges required');
+        toast.error('Access denied');
       }
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Login failed');
