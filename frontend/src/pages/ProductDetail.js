@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { useNavigate } from "react-router-dom";
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import { Button } from '@/components/ui/button';
@@ -12,6 +13,7 @@ import axios from 'axios';
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const ProductDetail = () => {
+  const navigate = useNavigate();
   const { slug } = useParams();
   const { addToCart } = useCart();
   const { user, token } = useAuth();
@@ -193,9 +195,18 @@ const ProductDetail = () => {
               )}
             </div>
 
-            <p className="text-gray-600 dark:text-gray-400 mb-8 leading-relaxed" data-testid="product-description">
+            <p className="text-gray-600 dark:text-gray-400 mb-6 leading-relaxed" data-testid="product-description">
               {product.description}
             </p>
+
+            <Button
+              onClick={() => navigate("/checkout", { state: product })}
+              disabled={product.stock <= 0}
+              className="w-full bg-orange-500 hover:bg-orange-600 text-white py-6 mb-8 text-lg font-semibold"
+              data-testid="buy-now-button"
+            >
+              Buy Now
+            </Button>
 
             <div className="flex items-center space-x-4 mb-8">
               <div className="flex items-center border border-gray-300 dark:border-gray-700 rounded-lg">
