@@ -80,25 +80,7 @@ const AdminLogin = () => {
             </Button>
           </form>
 
-          <div className="mt-6 flex items-center justify-between text-sm">
-            <Button
-              variant="link"
-              onClick={() => navigate('/seller/register')}
-              className="text-orange-400 hover:text-orange-300 p-0"
-              data-testid="seller-register-link"
-            >
-              Create Seller Account
-            </Button>
-            <Button
-              variant="link"
-              onClick={() => navigate('/')}
-              className="text-gray-400 hover:text-gray-300 p-0"
-            >
-              Back to Store
-            </Button>
-          </div>
-
-          <div className="mt-6 text-center text-sm text-gray-500 border-t border-gray-800 pt-6">
+          <div className="mt-6 text-center text-sm text-gray-500">
             <p>Default credentials:</p>
             <p className="font-mono text-gray-400">admin@eshop.com / admin123</p>
           </div>

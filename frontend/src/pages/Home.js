@@ -46,11 +46,18 @@ const Home = () => {
             <p className="text-lg text-gray-600 dark:text-gray-300 mb-8">
               Shop from thousands of products with unbeatable prices and fast delivery
             </p>
-            <Link to="/products">
-              <Button className="bg-orange-500 hover:bg-orange-600 text-white px-8 py-6 text-lg" data-testid="shop-now-button">
-                <ShoppingBag className="mr-2" /> Shop Now
-              </Button>
-            </Link>
+            <div className="flex flex-wrap gap-4">
+              <Link to="/products">
+                <Button className="bg-orange-500 hover:bg-orange-600 text-white px-8 py-6 text-lg" data-testid="shop-now-button">
+                  <ShoppingBag className="mr-2" /> Shop Now
+                </Button>
+              </Link>
+              <Link to="/seller/register">
+                <Button variant="outline" className="border-2 border-orange-500 text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-900/20 px-8 py-6 text-lg" data-testid="become-seller-button">
+                  <TrendingUp className="mr-2" /> Become a Seller
+                </Button>
+              </Link>
+            </div>
           </div>
         </div>
         <div className="absolute right-0 top-0 h-full w-1/2 hidden lg:block">
