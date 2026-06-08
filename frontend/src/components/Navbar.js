@@ -103,19 +103,11 @@ const Navbar = () => {
                       )}
                     </Button>
                   </Link>
-                  {user.role === 'customer' ? (
-                    <Link to="/buyer/dashboard" data-testid="dashboard-link">
-                      <Button variant="ghost" size="icon">
-                        <User className="w-5 h-5" />
-                      </Button>
-                    </Link>
-                  ) : (
-                    <Link to="/admin" data-testid="admin-link">
-                      <Button variant="outline" className="font-semibold">
-                        Admin Panel
-                      </Button>
-                    </Link>
-                  )}
+                  <Link to={user.role === 'customer' ? '/buyer/dashboard' : '/admin'} data-testid="profile-link">
+                    <Button variant="ghost" size="icon">
+                      <User className="w-5 h-5" />
+                    </Button>
+                  </Link>
                   <Button onClick={logout} variant="outline" data-testid="logout-button">
                     Logout
                   </Button>
@@ -164,19 +156,11 @@ const Navbar = () => {
                       <ShoppingCart className="w-5 h-5 mr-2" /> Cart ({getCartCount()})
                     </Button>
                   </Link>
-                  {user.role === 'customer' ? (
-                    <Link to="/buyer/dashboard" onClick={() => setMobileMenuOpen(false)}>
-                      <Button variant="ghost" className="w-full justify-start">
-                        <User className="w-5 h-5 mr-2" /> Dashboard
-                      </Button>
-                    </Link>
-                  ) : (
-                    <Link to="/admin" onClick={() => setMobileMenuOpen(false)}>
-                      <Button variant="ghost" className="w-full justify-start">
-                        <User className="w-5 h-5 mr-2" /> Admin Panel
-                      </Button>
-                    </Link>
-                  )}
+                  <Link to={user.role === 'customer' ? '/buyer/dashboard' : '/admin'} onClick={() => setMobileMenuOpen(false)}>
+                    <Button variant="ghost" className="w-full justify-start">
+                      <User className="w-5 h-5 mr-2" /> My Account
+                    </Button>
+                  </Link>
                   <Button onClick={() => { logout(); setMobileMenuOpen(false); }} variant="outline">
                     Logout
                   </Button>
