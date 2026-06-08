@@ -19,9 +19,12 @@ const AdminLogin = () => {
       const user = await login(formData.email, formData.password);
       
       // Redirect based on role
-      if (user.role === 'admin' || user.role === 'seller') {
-        toast.success(`Welcome ${user.role === 'admin' ? 'Admin' : 'Seller'}!`);
+      if (user.role === 'admin') {
+        toast.success('Welcome Admin!');
         navigate('/admin');
+      } else if (user.role === 'seller') {
+        toast.success('Welcome Seller!');
+        navigate('/seller');
       } else if (user.role === 'customer') {
         toast.success('Welcome!');
         navigate('/buyer/dashboard');

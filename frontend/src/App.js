@@ -70,55 +70,57 @@ function App() {
                 </ProtectedRoute>
               } />
               
-              {/* Admin/Seller Routes */}
+              {/* Admin Routes - Only for Admin */}
               <Route path="/admin/login" element={<AdminLogin />} />
               <Route path="/admin" element={
-                <ProtectedRoute allowedRoles={['admin', 'seller']}>
+                <ProtectedRoute allowedRoles={['admin']}>
                   <AdminDashboard />
                 </ProtectedRoute>
               } />
               <Route path="/admin/products" element={
-                <ProtectedRoute allowedRoles={['admin', 'seller']}>
+                <ProtectedRoute allowedRoles={['admin']}>
                   <AdminProducts />
                 </ProtectedRoute>
               } />
               <Route path="/admin/categories" element={
-                <ProtectedRoute allowedRoles={['admin', 'seller']}>
+                <ProtectedRoute allowedRoles={['admin']}>
                   <AdminCategories />
                 </ProtectedRoute>
               } />
               <Route path="/admin/orders" element={
-                <ProtectedRoute allowedRoles={['admin', 'seller']}>
+                <ProtectedRoute allowedRoles={['admin']}>
                   <AdminOrders />
                 </ProtectedRoute>
               } />
               <Route path="/admin/customers" element={
-                <ProtectedRoute allowedRoles={['admin', 'seller']}>
+                <ProtectedRoute allowedRoles={['admin']}>
                   <AdminCustomers />
                 </ProtectedRoute>
               } />
               <Route path="/admin/reviews" element={
-                <ProtectedRoute allowedRoles={['admin', 'seller']}>
+                <ProtectedRoute allowedRoles={['admin']}>
                   <AdminReviews />
                 </ProtectedRoute>
               } />
               <Route path="/admin/coupons" element={
-                <ProtectedRoute allowedRoles={['admin', 'seller']}>
+                <ProtectedRoute allowedRoles={['admin']}>
                   <AdminCoupons />
                 </ProtectedRoute>
               } />
               <Route path="/admin/banners" element={
-                <ProtectedRoute allowedRoles={['admin', 'seller']}>
+                <ProtectedRoute allowedRoles={['admin']}>
                   <AdminBanners />
                 </ProtectedRoute>
               } />
               <Route path="/admin/settings" element={
-                <ProtectedRoute allowedRoles={['admin', 'seller']}>
+                <ProtectedRoute allowedRoles={['admin']}>
                   <AdminSettings />
                 </ProtectedRoute>
               } />
+              
+              {/* Seller Routes - Only for Seller */}
               <Route path="/seller" element={
-                <ProtectedRoute allowedRoles={['admin', 'seller']}>
+                <ProtectedRoute allowedRoles={['seller']}>
                   <SellerDashboard />
                 </ProtectedRoute>
               } />

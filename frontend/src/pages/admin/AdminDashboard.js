@@ -15,7 +15,7 @@ const AdminDashboard = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!user || (user.role !== 'admin' && user.role !== 'seller')) {
+    if (!user || user.role !== 'admin') {
       navigate('/');
       return;
     }
@@ -36,7 +36,7 @@ const AdminDashboard = () => {
     }
   };
 
-  if (!user || (user.role !== 'admin' && user.role !== 'seller')) return null;
+  if (!user || user.role !== 'admin') return null;
 
   return (
     <AdminLayout>

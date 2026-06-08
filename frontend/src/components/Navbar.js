@@ -26,15 +26,25 @@ const Navbar = () => {
   const handleAuth = async (e) => {
     e.preventDefault();
     try {
+      let userData;
       if (isLogin) {
-        await login(formData.email, formData.password);
+        userData = await login(formData.email, formData.password);
         toast.success('Logged in successfully!');
       } else {
-        await register(formData.email, formData.password, formData.name);
+        userData = await register(formData.email, formData.password, formData.name);
         toast.success('Account created successfully!');
       }
       setAuthModalOpen(false);
       setFormData({ email: '', password: '', name: '' });
+      
+      // Redirect based on role
+      if (userData.role === 'admin') {
+        navigate('/admin');
+      } else if (userData.role === 'seller') {
+        navigate('/seller');
+      } else if (userData.role === 'customer') {
+        navigate('/buyer/dashboard');
+      }
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Authentication failed');
     }
@@ -103,7 +113,7 @@ const Navbar = () => {
                       )}
                     </Button>
                   </Link>
-                  <Link to={user.role === 'customer' ? '/buyer/dashboard' : '/admin'} data-testid="profile-link">
+                  <Link to={user.role === 'customer' ? '/buyer/dashboard' : user.role === 'seller' ? '/seller' : '/admin'} data-testid="profile-link">
                     <Button variant="ghost" size="icon">
                       <User className="w-5 h-5" />
                     </Button>
@@ -156,7 +166,7 @@ const Navbar = () => {
                       <ShoppingCart className="w-5 h-5 mr-2" /> Cart ({getCartCount()})
                     </Button>
                   </Link>
-                  <Link to={user.role === 'customer' ? '/buyer/dashboard' : '/admin'} onClick={() => setMobileMenuOpen(false)}>
+                  <Link to={user.role === 'customer' ? '/buyer/dashboard' : user.role === 'seller' ? '/seller' : '/admin'} onClick={() => setMobileMenuOpen(false)}>
                     <Button variant="ghost" className="w-full justify-start">
                       <User className="w-5 h-5 mr-2" /> My Account
                     </Button>
